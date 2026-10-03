@@ -1,0 +1,7 @@
+{
+  "web_url": "http://homeassistant.local:8123/dashboard-kiosk/pi4",
+  "web_theme": "dark",
+  "web_zoom": 1.0,
+  "web_widget": true,
+  "web_pager": false
+}

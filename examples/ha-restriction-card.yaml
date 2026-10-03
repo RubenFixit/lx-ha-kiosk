@@ -1,0 +1,12 @@
+# A dashboard card, not configuration.yaml. Install Restriction Card first.
+# Demonstration PIN only. Frontend users can inspect/bypass this guard.
+type: custom:restriction-card
+duration: 10
+restrictions:
+  pin:
+    code: "2468"
+    text: "Enter the household control PIN"
+    retry_delay: 2
+card:
+  type: thermostat
+  entity: climate.living_room
