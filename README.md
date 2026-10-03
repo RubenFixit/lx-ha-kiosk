@@ -13,11 +13,14 @@ The original panel's DSI connector, power wiring, orientation, and touch mapping
 
 ## First installation
 
+For the Pi 4/original 800×480 panel and the Ubuntu HP x360 at 1366×768, follow [the device setup guide](docs/device-setup.md). Both use the same local scripts after normal OS installation; no Ansible setup is required.
+
 Copy this repository to the device. In a terminal **inside its desktop session**:
 
 ```sh
 cp examples/pi4-original-7inch.json device.json
 # Edit web_url to your actual HA dashboard URL; choose theme and zoom.
+sh scripts/lx-ha-kiosk doctor --config device.json
 sh scripts/lx-ha-kiosk install --config device.json
 sh scripts/lx-ha-kiosk session-start
 ```
@@ -52,6 +55,8 @@ sh scripts/lx-ha-kiosk uninstall
 Update installs over the existing package and restarts only if the managed kiosk is running. It preserves device settings and browser login. Running install again with the same input is idempotent. To change settings, edit your **source** `device.json`, rerun install with `--skip-package` and the same autostart method, then restart. Avoid concurrent management commands.
 
 The stable installed manager lives in `~/.local/share/lx-ha-kiosk/manager.py`, so moving the checkout does not break startup. It can be invoked directly with `python3` and these same subcommands. The unit is `lx-ha-kiosk.service`; it is started by desktop autostart rather than enabled at boot. Stop is temporary until the next desktop login. Uninstall removes managed autostart and unit files to disable future startup.
+
+`update` updates TouchKio only. To refresh this repository's installed manager after `git pull --ff-only`, rerun `install --config device.json --skip-package` and restart.
 
 ## Preservation and rollback
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -77,7 +78,7 @@ def verify(m):
             raise ValueError('Managed file changed or missing; preserve/reconcile it first: ' + name)
     if 'labwc' in m:
         p = Path(m['labwc'])
-        if p.is_symlink() or not p.exists() or p.read_text().count(m['block']) != 1:
+        if p.is_symlink() or not p.exists() or p.read_bytes().count(m['block'].encode()) != 1:
             raise ValueError('Managed labwc block changed; reconcile it first.')
 
 
@@ -103,6 +104,46 @@ def platform_check():
     if native != arch:
         raise ValueError('Kernel and Debian userland architecture must match.')
     return arch
+
+
+def user_manager_check():
+    result = subprocess.run(['systemctl', '--user', 'show-environment'],
+                            text=True, capture_output=True)
+    if result.returncode:
+        raise ValueError('User systemd manager is unavailable. Run as the kiosk user in its logged-in desktop; no packages or settings were changed.')
+
+
+def home_check():
+    if not re.fullmatch(r'[A-Za-z0-9_/.-]+', str(Path.home())):
+        raise ValueError('This initial version requires a home path without spaces or special characters.')
+
+
+def conflict_check():
+    for state in ('is-active', 'is-enabled'):
+        result = subprocess.run(['systemctl', '--user', '--quiet', state, 'touchkio.service'])
+        if result.returncode == 0:
+            raise ValueError('Existing touchkio.service conflicts. Stop/disable it explicitly before proceeding; its files are preserved.')
+
+
+def doctor(args):
+    """Read-only prerequisite checks; intentionally no sudo or network access."""
+    arch = platform_check()
+    home_check()
+    for command in ('python3', 'systemctl', 'apt-get', 'dpkg-deb', 'sudo'):
+        if not shutil.which(command):
+            raise ValueError('Required command missing: ' + command)
+    user_manager_check()
+    conflict_check()
+    verify(load())
+    mode = session(args.autostart)
+    if args.config:
+        config(Path(args.config))
+        print('Device configuration: valid')
+    print('Architecture:', arch)
+    print('Autostart:', mode)
+    print('TouchKio:', 'installed' if shutil.which('touchkio') else 'will be installed')
+    print('Display environment:', 'available' if os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY') else 'not available; start from the desktop later')
+    print('Prerequisites passed. URL reachability, touchscreen behavior and HA login still need on-device verification.')
 
 
 def package(deb, version):
@@ -152,16 +193,13 @@ def install(args):
     c = config(Path(args.config))
     platform_check()
     mode = session(args.autostart)
-    if not re.fullmatch(r'[A-Za-z0-9_/.-]+', str(Path.home())):
-        raise ValueError('This initial version requires a home path without spaces or special characters.')
+    home_check()
+    user_manager_check()
     m = load()
     verify(m)
     if m.get('mode', mode) != mode:
         raise ValueError('Uninstall before changing autostart method.')
-    for state in ('is-active', 'is-enabled'):
-        result = subprocess.run(['systemctl', '--user', '--quiet', state, 'touchkio.service'])
-        if result.returncode == 0:
-            raise ValueError('Existing touchkio.service conflicts. Stop/disable it explicitly before proceeding; its files are preserved.')
+    conflict_check()
     starter = f'/usr/bin/python3 {ROOT}/manager.py session-start'
     service = ('[Unit]\nDescription=Home Assistant TouchKio kiosk\n'
                'PartOf=graphical-session.target\nStartLimitIntervalSec=120\nStartLimitBurst=5\n'
@@ -197,7 +235,8 @@ def install(args):
         atomic(ROOT / 'labwc-autostart.before', old)
         m.update(labwc=str(labwc), block=block, labwc_existed=labwc.exists())
         atomic(MANIFEST, json.dumps(m, indent=2).encode())
-        atomic(labwc, old + block.encode(), 0o644)
+        mode_bits = stat.S_IMODE(labwc.stat().st_mode) if labwc.exists() else 0o644
+        atomic(labwc, old + block.encode(), mode_bits)
     ctl('daemon-reload')
     print('Installed. Log in to the desktop or run session-start there. Existing TouchKio profile is preserved.')
 
@@ -233,11 +272,11 @@ def uninstall():
     ctl('stop', UNIT)
     if 'labwc' in m:
         p = Path(m['labwc'])
-        remaining = p.read_text().replace(m['block'], '', 1)
+        remaining = p.read_bytes().replace(m['block'].encode(), b'', 1)
         if not remaining and not m['labwc_existed']:
             p.unlink()
         else:
-            atomic(p, remaining.encode(), 0o644)
+            atomic(p, remaining, stat.S_IMODE(p.stat().st_mode))
     for name in m['files']:
         Path(name).unlink()
     MANIFEST.unlink()
@@ -258,6 +297,9 @@ def main():
     u = sub.add_parser('update')
     u.add_argument('--version', default='latest')
     u.add_argument('--deb')
+    d = sub.add_parser('doctor', help='Read-only prerequisite and configuration checks')
+    d.add_argument('--config')
+    d.add_argument('--autostart', choices=['auto', 'labwc', 'xdg'], default='auto')
     for name in ('status', 'start', 'stop', 'restart', 'uninstall', 'session-start', 'launch'):
         sub.add_parser(name)
     args = p.parse_args()
@@ -266,10 +308,13 @@ def main():
     try:
         if args.command == 'install':
             install(args)
+        elif args.command == 'doctor':
+            doctor(args)
         elif args.command == 'update':
             if not MANIFEST.exists():
                 raise ValueError('Install first.')
             verify(load())
+            user_manager_check()
             package(args.deb, args.version)
             if subprocess.run(['systemctl', '--user', '--quiet', 'is-active', UNIT]).returncode == 0:
                 ctl('restart', UNIT)

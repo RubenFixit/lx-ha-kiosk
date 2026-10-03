@@ -24,14 +24,12 @@ class DeploymentTests(unittest.TestCase):
                         patch.object(k, 'ROOT', self.root), patch.object(k, 'CFG', self.cfg),
                         patch.object(k, 'MANIFEST', self.root / 'manifest.json'),
                         patch.object(k, 'platform_check', return_value='amd64'),
+                        patch.object(k, 'user_manager_check'),
+                        patch.object(k, 'home_check'),
                         patch.object(k, 'ctl'), patch.object(k.shutil, 'which', return_value='/usr/bin/touchkio'),
-                        patch.object(k.subprocess, 'run', return_value=SimpleNamespace(returncode=1)),
-                        patch.object(k.re, 'fullmatch', wraps=k.re.fullmatch)]
+                        patch.object(k.subprocess, 'run', return_value=SimpleNamespace(returncode=1))]
         for p in self.patches:
             p.start()
-        # Windows temp paths are unsuitable for Linux launcher paths; bypass only that platform check.
-        self.real_match = k.re.fullmatch
-        k.re.fullmatch.side_effect = lambda pattern, value: True if pattern == r'[A-Za-z0-9_/.-]+' else self.real_match.__wrapped__(pattern, value)
 
     def tearDown(self):
         for p in reversed(self.patches):
@@ -61,7 +59,7 @@ class DeploymentTests(unittest.TestCase):
         autostart.write_text('existing-command &\n')
         k.install(self.args('labwc'))
         k.install(self.args('labwc'))
-        autostart.write_text(autostart.read_text() + 'later-command &\n')
+        autostart.write_bytes(autostart.read_bytes() + b'later-command &\n')
         k.uninstall()
         self.assertEqual(autostart.read_text(), 'existing-command &\nlater-command &\n')
 
@@ -101,6 +99,36 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             k.install(self.args())
         self.assertFalse(k.MANIFEST.exists())
+
+    def test_missing_user_manager_blocks_package_install(self):
+        k.user_manager_check.side_effect = ValueError('No user manager')
+        with patch.object(k, 'package') as package:
+            args = self.args()
+            args.skip_package = False
+            with self.assertRaises(ValueError):
+                k.install(args)
+            package.assert_not_called()
+        self.assertFalse(k.MANIFEST.exists())
+
+    def test_doctor_is_read_only(self):
+        with patch.object(k, 'atomic') as atomic, patch.object(k, 'package') as package:
+            k.doctor(SimpleNamespace(config=str(self.source), autostart='xdg'))
+            atomic.assert_not_called()
+            package.assert_not_called()
+        self.assertFalse(self.root.exists())
+
+    def test_supported_desktop_detection(self):
+        for desktop, mode in [('LXDE-pi:labwc', 'labwc'), ('ubuntu:GNOME', 'xdg'), ('XFCE', 'xdg')]:
+            with patch.dict(os.environ, {'XDG_CURRENT_DESKTOP': desktop}, clear=True):
+                self.assertEqual(k.session('auto'), mode)
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ValueError):
+                k.session('auto')
+
+    def test_all_device_examples_validate(self):
+        for example in (Path(__file__).parents[1] / 'examples').glob('*.json'):
+            with self.subTest(example=example.name):
+                k.config(example)
 
 
 if __name__ == '__main__':
