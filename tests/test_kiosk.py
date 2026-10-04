@@ -94,6 +94,24 @@ class DeploymentTests(unittest.TestCase):
             k.session_start()
             k.ctl.assert_any_call('import-environment', 'WAYLAND_DISPLAY')
 
+    def test_unloaded_unit_reset_does_not_block_session_start(self):
+        k.subprocess.run.return_value.returncode = 1
+        with patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-1'}, clear=True):
+            k.session_start()
+        k.subprocess.run.assert_called_with(
+            ['systemctl', '--user', 'reset-failed', k.UNIT],
+            text=True, capture_output=True, check=False)
+        k.ctl.assert_any_call('start', k.UNIT)
+
+    def test_session_start_still_reports_real_start_errors(self):
+        def service_command(*args, **kwargs):
+            if args[0] == 'start':
+                raise k.subprocess.CalledProcessError(1, args)
+        k.ctl.side_effect = service_command
+        with patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-1'}, clear=True):
+            with self.assertRaises(k.subprocess.CalledProcessError):
+                k.session_start()
+
     def test_conflicting_upstream_service(self):
         k.subprocess.run.return_value.returncode = 0
         with self.assertRaises(ValueError):

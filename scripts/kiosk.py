@@ -31,6 +31,13 @@ def ctl(*args, check=True):
     return run('systemctl', '--user', *args, check=check)
 
 
+def reset_failed():
+    # systemd may unload an inactive unit with no recorded failure. Resetting
+    # that unit is optional; the subsequent start/restart reports real errors.
+    subprocess.run(['systemctl', '--user', 'reset-failed', UNIT],
+                   text=True, capture_output=True, check=False)
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -249,7 +256,7 @@ def session_start():
     ctl('unset-environment', *names)
     present = [n for n in names if os.environ.get(n)]
     ctl('import-environment', *present)
-    ctl('reset-failed', UNIT)
+    reset_failed()
     ctl('start', UNIT)
 
 
@@ -330,7 +337,7 @@ def main():
                 print('Desktop:', os.environ.get('XDG_CURRENT_DESKTOP', 'unknown'))
                 run('dpkg-query', '-W', 'touchkio', check=False)
             if args.command in ('start', 'restart'):
-                ctl('reset-failed', UNIT)
+                reset_failed()
             result = ctl(args.command, UNIT, check=False)
             return result.returncode
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
